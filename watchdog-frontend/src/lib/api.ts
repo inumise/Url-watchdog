@@ -1,5 +1,4 @@
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-const TUNNEL_AUTH = import.meta.env.VITE_TUNNEL_AUTH || '';
 
 interface ApiResponse<T> {
   data?: T;
@@ -19,10 +18,6 @@ async function request<T>(
   
   if (token) {
     (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
-  }
-  
-  if (TUNNEL_AUTH) {
-    (headers as Record<string, string>)['X-Tunnel-Authorization'] = `Basic ${btoa(TUNNEL_AUTH)}`;
   }
   
   try {

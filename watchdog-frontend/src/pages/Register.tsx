@@ -42,14 +42,16 @@ export function Register() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-indigo-50 px-4">
+      <Card className="w-full max-w-md shadow-xl border-0">
+        <CardHeader className="text-center pb-2">
           <div className="flex justify-center mb-4">
-            <Eye className="h-12 w-12 text-blue-600" />
+            <div className="p-3 bg-blue-100 rounded-full">
+              <Eye className="h-10 w-10 text-blue-600" />
+            </div>
           </div>
-          <CardTitle className="text-2xl">URL Watchdog</CardTitle>
-          <CardDescription>Create your account</CardDescription>
+          <CardTitle className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">URL Watchdog</CardTitle>
+          <CardDescription className="text-gray-500">Create your account</CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">
