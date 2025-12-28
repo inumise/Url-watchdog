@@ -6,7 +6,7 @@ on:
       - devin/1766545452-url-watchdog-app
   workflow_dispatch:
 
-perissions:
+permissions:
   contents: read
   pages: write
   id-token: write
