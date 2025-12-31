@@ -1,12 +1,18 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Optional
+from pathlib import Path
 import os
 
 from dotenv import load_dotenv
 load_dotenv()
+
+# Path to frontend build directory
+STATIC_DIR = Path(__file__).parent.parent / "static"
 
 from app.database import db
 from app.models import User, Monitor, NotificationChannel
@@ -385,3 +391,18 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid webhook")
     
     return {"received": True}
+
+
+# Serve static files from frontend build
+if STATIC_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+    
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        """Serve the React SPA for all non-API routes"""
+        # Check if it's a static file
+        file_path = STATIC_DIR / full_path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(file_path)
+        # Otherwise serve index.html for SPA routing
+        return FileResponse(STATIC_DIR / "index.html")
