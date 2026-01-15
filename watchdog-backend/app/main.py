@@ -1,12 +1,9 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Request, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
-from datetime import timedelta
-from typing import Optional
 from pathlib import Path
-import os
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -16,23 +13,24 @@ STATIC_DIR = Path(__file__).parent.parent / "static"
 
 from app.database import db
 from app.models import User, Monitor, NotificationChannel
-from app.auth import (
-    UserCreate, UserLogin, Token, UserResponse,
-    get_current_user, register_user, authenticate_user,
-    create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
-)
 from app.schemas import (
     MonitorCreate, MonitorUpdate, MonitorResponse,
     NotificationChannelCreate, NotificationChannelUpdate, NotificationChannelResponse,
-    CheckLogResponse, CheckoutSessionRequest, BillingPortalRequest, mask_config
+    CheckLogResponse, mask_config
 )
 from app.scheduler import start_scheduler, stop_scheduler, trigger_immediate_check
-from app.stripe_service import create_checkout_session, handle_webhook_event, create_billing_portal_session
 from app.url_fetcher import validate_url
+
+# Default anonymous user ID for no-auth mode
+ANON_USER_ID = "anonymous"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Create anonymous user if not exists
+    if not db.get_user_by_id(ANON_USER_ID):
+        anon_user = User(id=ANON_USER_ID, email="anonymous@local", password_hash="")
+        db.create_user(anon_user)
     start_scheduler()
     yield
     stop_scheduler()
@@ -55,46 +53,8 @@ async def healthz():
     return {"status": "ok"}
 
 
-@app.post("/api/auth/register", response_model=Token)
-async def register(user_data: UserCreate):
-    user = register_user(user_data.email, user_data.password)
-    access_token = create_access_token(
-        data={"sub": user.id},
-        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
-    return {"access_token": access_token, "token_type": "bearer"}
-
-
-@app.post("/api/auth/login", response_model=Token)
-async def login(user_data: UserLogin):
-    user = authenticate_user(user_data.email, user_data.password)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password"
-        )
-    access_token = create_access_token(
-        data={"sub": user.id},
-        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
-    return {"access_token": access_token, "token_type": "bearer"}
-
-
-@app.get("/api/auth/me", response_model=UserResponse)
-async def get_me(current_user: User = Depends(get_current_user)):
-    return UserResponse(
-        id=current_user.id,
-        email=current_user.email,
-        subscription_status=current_user.subscription_status,
-        created_at=current_user.created_at
-    )
-
-
 @app.post("/api/monitors", response_model=MonitorResponse)
-async def create_monitor(
-    monitor_data: MonitorCreate,
-    current_user: User = Depends(get_current_user)
-):
+async def create_monitor(monitor_data: MonitorCreate):
     is_valid, error_msg = validate_url(monitor_data.url)
     if not is_valid:
         raise HTTPException(status_code=400, detail=error_msg)
@@ -102,17 +62,9 @@ async def create_monitor(
     if monitor_data.check_frequency < 1 or monitor_data.check_frequency > 24:
         raise HTTPException(status_code=400, detail="Check frequency must be between 1 and 24 times per day")
     
-    user_monitors = db.get_monitors_by_user(current_user.id)
-    max_monitors = 3 if current_user.subscription_status == "free" else 100
-    if len(user_monitors) >= max_monitors:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Monitor limit reached ({max_monitors}). Upgrade to Pro for more monitors."
-        )
-    
     monitor = Monitor(
         id=Monitor.generate_id(),
-        user_id=current_user.id,
+        user_id=ANON_USER_ID,
         name=monitor_data.name,
         url=monitor_data.url,
         keywords=monitor_data.keywords,
@@ -135,8 +87,8 @@ async def create_monitor(
 
 
 @app.get("/api/monitors", response_model=list[MonitorResponse])
-async def list_monitors(current_user: User = Depends(get_current_user)):
-    monitors = db.get_monitors_by_user(current_user.id)
+async def list_monitors():
+    monitors = db.get_monitors_by_user(ANON_USER_ID)
     return [
         MonitorResponse(
             id=m.id,
@@ -155,9 +107,9 @@ async def list_monitors(current_user: User = Depends(get_current_user)):
 
 
 @app.get("/api/monitors/{monitor_id}", response_model=MonitorResponse)
-async def get_monitor(monitor_id: str, current_user: User = Depends(get_current_user)):
+async def get_monitor(monitor_id: str):
     monitor = db.get_monitor_by_id(monitor_id)
-    if not monitor or monitor.user_id != current_user.id:
+    if not monitor:
         raise HTTPException(status_code=404, detail="Monitor not found")
     
     return MonitorResponse(
@@ -175,13 +127,9 @@ async def get_monitor(monitor_id: str, current_user: User = Depends(get_current_
 
 
 @app.put("/api/monitors/{monitor_id}", response_model=MonitorResponse)
-async def update_monitor(
-    monitor_id: str,
-    monitor_data: MonitorUpdate,
-    current_user: User = Depends(get_current_user)
-):
+async def update_monitor(monitor_id: str, monitor_data: MonitorUpdate):
     monitor = db.get_monitor_by_id(monitor_id)
-    if not monitor or monitor.user_id != current_user.id:
+    if not monitor:
         raise HTTPException(status_code=404, detail="Monitor not found")
     
     if monitor_data.url is not None:
@@ -218,9 +166,9 @@ async def update_monitor(
 
 
 @app.delete("/api/monitors/{monitor_id}")
-async def delete_monitor(monitor_id: str, current_user: User = Depends(get_current_user)):
+async def delete_monitor(monitor_id: str):
     monitor = db.get_monitor_by_id(monitor_id)
-    if not monitor or monitor.user_id != current_user.id:
+    if not monitor:
         raise HTTPException(status_code=404, detail="Monitor not found")
     
     db.delete_monitor(monitor_id)
@@ -228,13 +176,9 @@ async def delete_monitor(monitor_id: str, current_user: User = Depends(get_curre
 
 
 @app.post("/api/monitors/{monitor_id}/check")
-async def trigger_check(
-    monitor_id: str,
-    background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user)
-):
+async def trigger_check(monitor_id: str, background_tasks: BackgroundTasks):
     monitor = db.get_monitor_by_id(monitor_id)
-    if not monitor or monitor.user_id != current_user.id:
+    if not monitor:
         raise HTTPException(status_code=404, detail="Monitor not found")
     
     background_tasks.add_task(trigger_immediate_check, monitor_id)
@@ -242,9 +186,9 @@ async def trigger_check(
 
 
 @app.get("/api/monitors/{monitor_id}/logs", response_model=list[CheckLogResponse])
-async def get_monitor_logs(monitor_id: str, current_user: User = Depends(get_current_user)):
+async def get_monitor_logs(monitor_id: str):
     monitor = db.get_monitor_by_id(monitor_id)
-    if not monitor or monitor.user_id != current_user.id:
+    if not monitor:
         raise HTTPException(status_code=404, detail="Monitor not found")
     
     logs = db.get_check_logs_by_monitor(monitor_id)
@@ -263,13 +207,10 @@ async def get_monitor_logs(monitor_id: str, current_user: User = Depends(get_cur
 
 
 @app.post("/api/notifications", response_model=NotificationChannelResponse)
-async def create_notification_channel(
-    channel_data: NotificationChannelCreate,
-    current_user: User = Depends(get_current_user)
-):
+async def create_notification_channel(channel_data: NotificationChannelCreate):
     channel = NotificationChannel(
         id=NotificationChannel.generate_id(),
-        user_id=current_user.id,
+        user_id=ANON_USER_ID,
         name=channel_data.name,
         channel_type=channel_data.channel_type,
         config=channel_data.config
@@ -287,8 +228,8 @@ async def create_notification_channel(
 
 
 @app.get("/api/notifications", response_model=list[NotificationChannelResponse])
-async def list_notification_channels(current_user: User = Depends(get_current_user)):
-    channels = db.get_notification_channels_by_user(current_user.id)
+async def list_notification_channels():
+    channels = db.get_notification_channels_by_user(ANON_USER_ID)
     return [
         NotificationChannelResponse(
             id=c.id,
@@ -303,13 +244,9 @@ async def list_notification_channels(current_user: User = Depends(get_current_us
 
 
 @app.put("/api/notifications/{channel_id}", response_model=NotificationChannelResponse)
-async def update_notification_channel(
-    channel_id: str,
-    channel_data: NotificationChannelUpdate,
-    current_user: User = Depends(get_current_user)
-):
+async def update_notification_channel(channel_id: str, channel_data: NotificationChannelUpdate):
     channel = db.get_notification_channel_by_id(channel_id)
-    if not channel or channel.user_id != current_user.id:
+    if not channel:
         raise HTTPException(status_code=404, detail="Notification channel not found")
     
     if channel_data.name is not None:
@@ -332,65 +269,15 @@ async def update_notification_channel(
 
 
 @app.delete("/api/notifications/{channel_id}")
-async def delete_notification_channel(channel_id: str, current_user: User = Depends(get_current_user)):
+async def delete_notification_channel(channel_id: str):
     channel = db.get_notification_channel_by_id(channel_id)
-    if not channel or channel.user_id != current_user.id:
+    if not channel:
         raise HTTPException(status_code=404, detail="Notification channel not found")
     
     db.delete_notification_channel(channel_id)
     return {"message": "Notification channel deleted"}
 
 
-@app.post("/api/billing/checkout")
-async def create_checkout(
-    request: CheckoutSessionRequest,
-    current_user: User = Depends(get_current_user)
-):
-    checkout_url = create_checkout_session(
-        current_user,
-        request.success_url,
-        request.cancel_url
-    )
-    
-    if not checkout_url:
-        raise HTTPException(
-            status_code=503,
-            detail="Payment service not configured. Contact support."
-        )
-    
-    return {"checkout_url": checkout_url}
-
-
-@app.post("/api/billing/portal")
-async def create_portal(
-    request: BillingPortalRequest,
-    current_user: User = Depends(get_current_user)
-):
-    portal_url = create_billing_portal_session(current_user, request.return_url)
-    
-    if not portal_url:
-        raise HTTPException(
-            status_code=400,
-            detail="No active subscription found"
-        )
-    
-    return {"portal_url": portal_url}
-
-
-@app.post("/api/webhooks/stripe")
-async def stripe_webhook(request: Request):
-    payload = await request.body()
-    sig_header = request.headers.get("stripe-signature", "")
-    webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-    
-    if not webhook_secret:
-        raise HTTPException(status_code=503, detail="Webhook not configured")
-    
-    success = handle_webhook_event(payload, sig_header, webhook_secret)
-    if not success:
-        raise HTTPException(status_code=400, detail="Invalid webhook")
-    
-    return {"received": True}
 
 
 # Serve static files from frontend build

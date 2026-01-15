@@ -1,14 +1,12 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { useAuth } from '../lib/auth-context';
 import { api, Monitor } from '../lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Eye, Bell, Settings, LogOut, Play, Trash2, ExternalLink, Clock, AlertCircle, CheckCircle } from 'lucide-react';
+import { Plus, Eye, Bell, Settings, Play, Trash2, ExternalLink, Clock, AlertCircle, CheckCircle } from 'lucide-react';
 
 export function Dashboard() {
-  const { user, logout } = useAuth();
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -62,10 +60,6 @@ export function Dashboard() {
                 Settings
               </Button>
             </Link>
-            <Button variant="ghost" size="sm" onClick={logout}>
-              <LogOut className="h-4 w-4 mr-2" />
-              Logout
-            </Button>
           </nav>
         </div>
       </header>
@@ -74,12 +68,9 @@ export function Dashboard() {
         <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-2xl font-bold">Your Monitors</h1>
-            <p className="text-gray-600">
-              {user?.subscription_status === 'free' 
-                ? `Free plan: ${monitors.length}/3 monitors used`
-                : `Pro plan: ${monitors.length} monitors`
-              }
-            </p>
+                        <p className="text-gray-600">
+                          {monitors.length} monitors
+                        </p>
           </div>
           <Link to="/monitors/new">
             <Button>
